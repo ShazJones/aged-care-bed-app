@@ -3,236 +3,318 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
-// 1️⃣ Supabase client
+// -------------------------
+// Supabase setup
+// -------------------------
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-interface Bed {
+// -------------------------
+// Helper: client UUID
+// -------------------------
+function getClientUUID() {
+  if (typeof window === 'undefined') return null
+  let id = localStorage.getItem('client_uuid')
+  if (!id) {
+    id = crypto.randomUUID()
+    localStorage.setItem('client_uuid', id)
+  }
+  return id
+}
+
+// -------------------------
+// Types
+// -------------------------
+type Patient = {
+  id: string
+  first_name?: string
+  last_name?: string
+  phone?: string
+  email?: string
+  hospital: string
+  approval_code: string
+  rad_amount?: number
+  dap_amount?: number
+  means_tested_care_fee?: number
+}
+
+type Bed = {
   id: string
   facility_name: string
   suburb: string
   room_type: string
   available_from_date: string
-  rad_amount: number | null
-  dap_amount: number | null
+  rad: number | null
+  dap: number | null
+  status: string
 }
 
-interface Interest {
+type Interest = {
   id: string
   bed_id: string
-  user_id: string
+  status: string
 }
 
-export default function HomePage() {
-  // 2️⃣ Bed state
+// -------------------------
+// Main Component
+// -------------------------
+export default function Home() {
+  const [patient, setPatient] = useState<Patient | null>(null)
   const [beds, setBeds] = useState<Bed[]>([])
-  const [loadingBeds, setLoadingBeds] = useState(true)
+  const [interests, setInterests] = useState<Interest[]>([])
+  const [step, setStep] = useState<number>(0) // 0 = Eligibility, 1 = Identity, etc.
 
-  // 3️⃣ User onboarding fields
-  const [firstName, setFirstName] = useState('')
-  const [lastName, setLastName] = useState('')
-  const [phone, setPhone] = useState('')
-  const [email, setEmail] = useState('')
-  const [hospital, setHospital] = useState('')
-  const [approvalCode, setApprovalCode] = useState('')
-  const [rad, setRad] = useState<number | null>(null)
-  const [dap, setDap] = useState<number | null>(null)
-  const [basicFee, setBasicFee] = useState<number>(65.55)
-  const [meansTestedFee, setMeansTestedFee] = useState<number>(0)
-
-  const [activeInterest, setActiveInterest] = useState<Interest | null>(null)
-
-  // 4️⃣ Load localStorage data on page load
+  // -------------------------
+  // Load or create patient
+  // -------------------------
   useEffect(() => {
-    const stored = localStorage.getItem('userInfo')
-    if (stored) {
-      const data = JSON.parse(stored)
-      setFirstName(data.firstName)
-      setLastName(data.lastName)
-      setPhone(data.phone)
-      setEmail(data.email)
-      setHospital(data.hospital)
-      setApprovalCode(data.approvalCode)
-      setRad(data.rad)
-      setDap(data.dap)
-      setBasicFee(data.basicFee)
-      setMeansTestedFee(data.meansTestedFee)
+    async function loadOrCreatePatient() {
+      const clientUUID = getClientUUID()
+      if (!clientUUID) return
+
+      const { data: existing, error: selectError } = await supabase
+        .from('patients')
+        .select('*')
+        .eq('client_uuid', clientUUID)
+        .single()
+
+      if (selectError && selectError.code !== 'PGRST116') {
+        console.error('Error loading patient:', selectError)
+      }
+
+      if (existing) {
+        setPatient(existing)
+        return
+      }
+
+      const { data: created, error: insertError } = await supabase
+        .from('patients')
+        .insert({ client_uuid: clientUUID, hospital: '', approval_code: '' })
+        .select()
+        .single()
+
+      if (insertError) console.error('Error creating patient:', insertError)
+      else setPatient(created)
     }
+
+    loadOrCreatePatient()
   }, [])
 
-  // 5️⃣ Fetch available beds
+  // -------------------------
+  // Load beds
+  // -------------------------
   useEffect(() => {
-    const fetchBeds = async () => {
+    async function loadBeds() {
       const { data, error } = await supabase
         .from('beds')
         .select('*')
         .eq('status', 'open')
         .order('available_from_date', { ascending: true })
-
-      if (error) console.error(error)
-      else setBeds(data as Bed[])
-      setLoadingBeds(false)
+      if (error) console.error('Error loading beds:', error)
+      else setBeds(data || [])
     }
-
-    fetchBeds()
+    loadBeds()
   }, [])
 
-  // 6️⃣ Fetch existing active interest (demo user)
+  // -------------------------
+  // Load existing interest
+  // -------------------------
   useEffect(() => {
-    const userId = 'demo-patient'
-    const fetchInterest = async () => {
-      const { data } = await supabase
+    async function loadInterest() {
+      if (!patient) return
+      const { data, error } = await supabase
         .from('interests')
         .select('*')
-        .eq('user_id', userId)
-        .single()
-      if (data) setActiveInterest(data)
+        .eq('patient_id', patient.id)
+        .in('status', ['waiting', 'offered'])
+      if (error) console.error('Error loading interests:', error)
+      else setInterests(data || [])
     }
-    fetchInterest()
-  }, [])
+    loadInterest()
+  }, [patient])
 
-  // 7️⃣ Approval code validation
-  const isApprovalCodeValid = (code: string) => /^[1-9]-\d{12}$/.test(code)
-
-  // 8️⃣ Submit interest
-  const submitInterest = async (bedId: string) => {
-    if (!firstName || !lastName) return alert('Please enter your full name.')
-    if (!hospital) return alert('Please enter your current hospital.')
-    if (!isApprovalCodeValid(approvalCode)) return alert('Invalid Approval Code format.')
-    if (activeInterest) return alert('You already have an active interest.')
-
-    const userId = 'demo-patient'
-
-    const { error } = await supabase.from('interests').insert([
-      {
-        bed_id: bedId,
-        user_id: userId,
-        first_name: firstName,
-        last_name: lastName,
-        phone,
-        email,
-        hospital,
-        approval_code: approvalCode,
-        rad_amount: rad,
-        dap_amount: dap,
-        basic_daily_fee: basicFee,
-        means_tested_fee: meansTestedFee,
-        created_at: new Date()
-      }
-    ])
-
-    if (error) {
-      console.error(error)
-      alert('Error submitting interest.')
-    } else {
-      alert('Interest submitted successfully!')
-      setActiveInterest({ id: 'temp', bed_id: bedId, user_id: userId })
-
-      // Save info to localStorage
-      localStorage.setItem('userInfo', JSON.stringify({
-        firstName,
-        lastName,
-        phone,
-        email,
-        hospital,
-        approvalCode,
-        rad,
-        dap,
-        basicFee,
-        meansTestedFee
-      }))
-    }
+  // -------------------------
+  // Save patient updates
+  // -------------------------
+  const savePatientField = async (field: keyof Patient, value: any) => {
+    if (!patient) return
+    const { data, error } = await supabase
+      .from('patients')
+      .update({ [field]: value })
+      .eq('id', patient.id)
+      .select()
+      .single()
+    if (error) console.error('Error updating patient:', error)
+    else setPatient(data)
   }
 
-  // 9️⃣ Render form + bed feed
-  return (
-    <div style={{ padding: '2rem', maxWidth: '800px', margin: '0 auto' }}>
-      <h1>Available Bed Opportunities</h1>
+  // -------------------------
+  // Create interest
+  // -------------------------
+  const createInterest = async (bed_id: string) => {
+    if (!patient) return
+    if (interests.length > 0) {
+      alert('You can only have one active interest at a time.')
+      return
+    }
+    const { data, error } = await supabase
+      .from('interests')
+      .insert({ patient_id: patient.id, bed_id })
+      .select()
+      .single()
+    if (error) console.error('Error creating interest:', error)
+    else setInterests([data])
+  }
 
-      {/* Onboarding form */}
-      <div style={{ border: '1px solid #ccc', padding: '1rem', marginBottom: '2rem' }}>
-        <h2>Your Details (Hospital Patients Only)</h2>
+  // -------------------------
+  // Render UI
+  // -------------------------
+  if (!patient) return <div>Loading...</div>
 
+  // -------------------------
+  // Step 0: Eligibility Gate
+  // -------------------------
+  if (step === 0)
+    return (
+      <div>
+        <h2>Eligibility</h2>
         <label>
-          First Name:<br />
-          <input type="text" value={firstName} onChange={e => setFirstName(e.target.value)} />
+          Hospital:
+          <input
+            type="text"
+            value={patient.hospital || ''}
+            onChange={(e) => savePatientField('hospital', e.target.value)}
+          />
         </label>
-        <br /><br />
-
         <label>
-          Last Name:<br />
-          <input type="text" value={lastName} onChange={e => setLastName(e.target.value)} />
+          Approval Code (X-123456789012):
+          <input
+            type="text"
+            value={patient.approval_code || ''}
+            onChange={(e) => savePatientField('approval_code', e.target.value)}
+          />
         </label>
-        <br /><br />
-
-        <label>
-          Phone:<br />
-          <input type="text" value={phone} onChange={e => setPhone(e.target.value)} />
-        </label>
-        <br /><br />
-
-        <label>
-          Email:<br />
-          <input type="email" value={email} onChange={e => setEmail(e.target.value)} />
-        </label>
-        <br /><br />
-
-        <label>
-          Current Hospital:<br />
-          <input type="text" value={hospital} onChange={e => setHospital(e.target.value)} />
-        </label>
-        <br /><br />
-
-        <label>
-          Permanent Residential Approval Code:<br />
-          <input type="text" value={approvalCode} onChange={e => setApprovalCode(e.target.value)} placeholder="0-123456789012" />
-        </label>
-        <br /><br />
-
-        <label>
-          RAD Amount (optional):<br />
-          <input type="number" value={rad ?? ''} onChange={e => setRad(e.target.value ? Number(e.target.value) : null)} />
-        </label>
-        <br /><br />
-
-        <label>
-          DAP Amount (optional):<br />
-          <input type="number" value={dap ?? ''} onChange={e => setDap(e.target.value ? Number(e.target.value) : null)} />
-        </label>
-        <br /><br />
-
-        <label>
-          Basic Daily Fee ($):<br />
-          <input type="number" value={basicFee} onChange={e => setBasicFee(Number(e.target.value))} />
-        </label>
-        <br /><br />
-
-        <label>
-          Means-Tested Care Fee ($):<br />
-          <input type="number" value={meansTestedFee} onChange={e => setMeansTestedFee(Number(e.target.value))} />
-        </label>
+        <button onClick={() => setStep(1)}>Next</button>
       </div>
+    )
 
-      {/* Bed Feed */}
-      {loadingBeds ? (
-        <p>Loading beds…</p>
-      ) : beds.length === 0 ? (
-        <p>No beds available at the moment.</p>
-      ) : (
-        beds.map(bed => (
-          <div key={bed.id} style={{ border: '1px solid #ccc', padding: '1rem', marginBottom: '1rem' }}>
-            <p><strong>Facility:</strong> {bed.facility_name}</p>
-            <p><strong>Suburb:</strong> {bed.suburb}</p>
-            <p><strong>Room Type:</strong> {bed.room_type}</p>
-            <p><strong>Available From:</strong> {bed.available_from_date}</p>
-            <p><strong>RAD:</strong> {bed.rad_amount ?? 'N/A'} | <strong>DAP:</strong> {bed.dap_amount ?? 'N/A'}</p>
-            <button onClick={() => submitInterest(bed.id)} disabled={!!activeInterest}>
-              {activeInterest ? 'Interest Already Submitted' : "I'm Interested"}
-            </button>
-          </div>
-        ))
-      )}
-    </div>
-  )
+  // -------------------------
+  // Step 1: Identity
+  // -------------------------
+  if (step === 1)
+    return (
+      <div>
+        <h2>Identity</h2>
+        <label>
+          First Name:
+          <input
+            type="text"
+            value={patient.first_name || ''}
+            onChange={(e) => savePatientField('first_name', e.target.value)}
+          />
+        </label>
+        <label>
+          Last Name:
+          <input
+            type="text"
+            value={patient.last_name || ''}
+            onChange={(e) => savePatientField('last_name', e.target.value)}
+          />
+        </label>
+        <label>
+          Phone:
+          <input
+            type="text"
+            value={patient.phone || ''}
+            onChange={(e) => savePatientField('phone', e.target.value)}
+          />
+        </label>
+        <label>
+          Email:
+          <input
+            type="email"
+            value={patient.email || ''}
+            onChange={(e) => savePatientField('email', e.target.value)}
+          />
+        </label>
+        <button onClick={() => setStep(2)}>Next</button>
+      </div>
+    )
+
+  // -------------------------
+  // Step 2: Admission Constraints
+  // -------------------------
+  if (step === 2)
+    return (
+      <div>
+        <h2>Admission Constraints</h2>
+        <label>
+          Room Type:
+          <select
+            value={patient.rad_amount ? 'single' : 'shared'}
+            onChange={(e) => savePatientField('rad_amount', e.target.value)}
+          >
+            <option value="single">Single</option>
+            <option value="shared">Shared</option>
+          </select>
+        </label>
+        <label>
+          RAD amount:
+          <input
+            type="number"
+            value={patient.rad_amount || 0}
+            onChange={(e) => savePatientField('rad_amount', Number(e.target.value))}
+          />
+        </label>
+        <label>
+          DAP amount:
+          <input
+            type="number"
+            value={patient.dap_amount || 0}
+            onChange={(e) => savePatientField('dap_amount', Number(e.target.value))}
+          />
+        </label>
+        <label>
+          Means-Tested Care Fee ($0-$400):
+          <input
+            type="number"
+            value={patient.means_tested_care_fee || 0}
+            onChange={(e) => savePatientField('means_tested_care_fee', Number(e.target.value))}
+          />
+        </label>
+        <button onClick={() => setStep(3)}>Next</button>
+      </div>
+    )
+
+  // -------------------------
+  // Step 3: Bed Opportunities Feed
+  // -------------------------
+  if (step === 3)
+    return (
+      <div>
+        <h2>Available Beds</h2>
+        {beds.length === 0 ? (
+          <p>No beds available right now.</p>
+        ) : (
+          beds.map((bed) => (
+            <div key={bed.id} style={{ border: '1px solid black', margin: 5, padding: 5 }}>
+              <p>
+                <strong>{bed.facility_name}</strong> — {bed.suburb} — {bed.room_type}
+              </p>
+              <p>Available From: {bed.available_from_date}</p>
+              <p>RAD: {bed.rad || '-'} | DAP: {bed.dap || '-'}</p>
+              <button
+                disabled={interests.length > 0}
+                onClick={() => createInterest(bed.id)}
+              >
+                {interests.length > 0 ? 'Interest Active' : 'Express Interest'}
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    )
+
+  return <div>Unknown step</div>
 }
