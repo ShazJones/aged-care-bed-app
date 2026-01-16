@@ -6,9 +6,14 @@ import { createClient } from '@supabase/supabase-js'
 // -------------------------
 // Supabase setup
 // -------------------------
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-const supabase = createClient(supabaseUrl, supabaseAnonKey)
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('Supabase environment variables missing!')
+}
+
+const supabase = createClient(supabaseUrl!, supabaseAnonKey!)
 
 // -------------------------
 // Helper: client UUID
@@ -19,6 +24,9 @@ function getClientUUID() {
   if (!id) {
     id = crypto.randomUUID()
     localStorage.setItem('client_uuid', id)
+    console.log('Generated new client_uuid:', id)
+  } else {
+    console.log('Loaded client_uuid from localStorage:', id)
   }
   return id
 }
@@ -63,7 +71,8 @@ export default function Home() {
   const [patient, setPatient] = useState<Patient | null>(null)
   const [beds, setBeds] = useState<Bed[]>([])
   const [interests, setInterests] = useState<Interest[]>([])
-  const [step, setStep] = useState<number>(0) // 0 = Eligibility, 1 = Identity, etc.
+  const [step, setStep] = useState<number>(0)
+  const [loading, setLoading] = useState(true)
 
   // -------------------------
   // Load or create patient
@@ -71,31 +80,42 @@ export default function Home() {
   useEffect(() => {
     async function loadOrCreatePatient() {
       const clientUUID = getClientUUID()
-      if (!clientUUID) return
-
-      const { data: existing, error: selectError } = await supabase
-        .from('patients')
-        .select('*')
-        .eq('client_uuid', clientUUID)
-        .single()
-
-      if (selectError && selectError.code !== 'PGRST116') {
-        console.error('Error loading patient:', selectError)
-      }
-
-      if (existing) {
-        setPatient(existing)
+      if (!clientUUID) {
+        console.error('client_uuid not available')
+        setLoading(false)
         return
       }
 
-      const { data: created, error: insertError } = await supabase
-        .from('patients')
-        .insert({ client_uuid: clientUUID, hospital: '', approval_code: '' })
-        .select()
-        .single()
+      try {
+        // Try to fetch existing patient
+        const { data: existing, error: selectError } = await supabase
+          .from('patients')
+          .select('*')
+          .eq('client_uuid', clientUUID)
+          .single()
 
-      if (insertError) console.error('Error creating patient:', insertError)
-      else setPatient(created)
+        if (selectError && selectError.code !== 'PGRST116') {
+          console.error('Error loading patient:', selectError)
+        }
+
+        if (existing) {
+          setPatient(existing)
+        } else {
+          // Create new patient row if none exists
+          const { data: created, error: insertError } = await supabase
+            .from('patients')
+            .insert({ client_uuid: clientUUID, hospital: '', approval_code: '' })
+            .select()
+            .single()
+
+          if (insertError) console.error('Error creating patient:', insertError)
+          else setPatient(created)
+        }
+      } catch (err) {
+        console.error('Unexpected error loading/creating patient:', err)
+      } finally {
+        setLoading(false)
+      }
     }
 
     loadOrCreatePatient()
@@ -106,47 +126,59 @@ export default function Home() {
   // -------------------------
   useEffect(() => {
     async function loadBeds() {
-      const { data, error } = await supabase
-        .from('beds')
-        .select('*')
-        .eq('status', 'open')
-        .order('available_from_date', { ascending: true })
-      if (error) console.error('Error loading beds:', error)
-      else setBeds(data || [])
+      try {
+        const { data, error } = await supabase
+          .from('beds')
+          .select('*')
+          .eq('status', 'open')
+          .order('available_from_date', { ascending: true })
+        if (error) console.error('Error loading beds:', error)
+        else setBeds(data || [])
+      } catch (err) {
+        console.error('Unexpected error fetching beds:', err)
+      }
     }
     loadBeds()
   }, [])
 
   // -------------------------
-  // Load existing interest
+  // Load interests
   // -------------------------
   useEffect(() => {
     async function loadInterest() {
       if (!patient) return
-      const { data, error } = await supabase
-        .from('interests')
-        .select('*')
-        .eq('patient_id', patient.id)
-        .in('status', ['waiting', 'offered'])
-      if (error) console.error('Error loading interests:', error)
-      else setInterests(data || [])
+      try {
+        const { data, error } = await supabase
+          .from('interests')
+          .select('*')
+          .eq('patient_id', patient.id)
+          .in('status', ['waiting', 'offered'])
+        if (error) console.error('Error loading interests:', error)
+        else setInterests(data || [])
+      } catch (err) {
+        console.error('Unexpected error loading interests:', err)
+      }
     }
     loadInterest()
   }, [patient])
 
   // -------------------------
-  // Save patient updates
+  // Save patient field
   // -------------------------
   const savePatientField = async (field: keyof Patient, value: any) => {
     if (!patient) return
-    const { data, error } = await supabase
-      .from('patients')
-      .update({ [field]: value })
-      .eq('id', patient.id)
-      .select()
-      .single()
-    if (error) console.error('Error updating patient:', error)
-    else setPatient(data)
+    try {
+      const { data, error } = await supabase
+        .from('patients')
+        .update({ [field]: value })
+        .eq('id', patient.id)
+        .select()
+        .single()
+      if (error) console.error('Error updating patient:', error)
+      else setPatient(data)
+    } catch (err) {
+      console.error('Unexpected error saving patient field:', err)
+    }
   }
 
   // -------------------------
@@ -158,27 +190,31 @@ export default function Home() {
       alert('You can only have one active interest at a time.')
       return
     }
-    const { data, error } = await supabase
-      .from('interests')
-      .insert({ patient_id: patient.id, bed_id })
-      .select()
-      .single()
-    if (error) console.error('Error creating interest:', error)
-    else setInterests([data])
+    try {
+      const { data, error } = await supabase
+        .from('interests')
+        .insert({ patient_id: patient.id, bed_id })
+        .select()
+        .single()
+      if (error) console.error('Error creating interest:', error)
+      else setInterests([data])
+    } catch (err) {
+      console.error('Unexpected error creating interest:', err)
+    }
   }
 
-  // -------------------------
-  // Render UI
-  // -------------------------
-  if (!patient) return <div>Loading...</div>
+  if (loading) return <div>Loading...</div>
 
   // -------------------------
-  // Step 0: Eligibility Gate
+  // Step Screens
   // -------------------------
+  if (!patient) return <div>Error loading patient info</div>
+
+  // Step 0: Eligibility
   if (step === 0)
     return (
       <div>
-        <h2>Eligibility</h2>
+        <h2>Eligibility (people waiting in hospital)</h2>
         <label>
           Hospital:
           <input
@@ -188,7 +224,7 @@ export default function Home() {
           />
         </label>
         <label>
-          Approval Code (X-123456789012):
+          Approval Code (0-123456789012):
           <input
             type="text"
             value={patient.approval_code || ''}
@@ -199,9 +235,7 @@ export default function Home() {
       </div>
     )
 
-  // -------------------------
   // Step 1: Identity
-  // -------------------------
   if (step === 1)
     return (
       <div>
@@ -242,9 +276,7 @@ export default function Home() {
       </div>
     )
 
-  // -------------------------
-  // Step 2: Admission Constraints
-  // -------------------------
+  // Step 2: Constraints
   if (step === 2)
     return (
       <div>
@@ -287,9 +319,7 @@ export default function Home() {
       </div>
     )
 
-  // -------------------------
-  // Step 3: Bed Opportunities Feed
-  // -------------------------
+  // Step 3: Bed Feed
   if (step === 3)
     return (
       <div>
