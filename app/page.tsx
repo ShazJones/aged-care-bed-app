@@ -6,16 +6,13 @@ import { createClient } from '@supabase/supabase-js'
 /* ------------------------------------------------------------------ */
 /* SUPABASE CLIENT                                                     */
 /* ------------------------------------------------------------------ */
-
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 /* ------------------------------------------------------------------ */
 /* UTILITIES                                                           */
 /* ------------------------------------------------------------------ */
-
 function getClientUUID(): string {
   let id = localStorage.getItem('client_uuid')
   if (!id) {
@@ -32,9 +29,9 @@ function isValidEmail(email: string) {
   return /\S+@\S+\.\S+/.test(email)
 }
 
+// ✅ Approval code: 1 digit non-zero, dash, 12 digits
 function isValidApprovalCode(code: string) {
-  // Must be A- followed by 12 digits, not starting with 0
-  return /^[A-Z]-[1-9][0-9]{11}$/.test(code)
+  return /^[1-9]-\d{12}$/.test(code)
 }
 
 function isScreen1Valid(data: {
@@ -58,16 +55,13 @@ function isScreen1Valid(data: {
 /* ------------------------------------------------------------------ */
 /* PAGE                                                                */
 /* ------------------------------------------------------------------ */
-
 export default function Page() {
   const [clientUUID, setClientUUID] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
   const [step, setStep] = useState<'screen1' | 'next'>('screen1')
 
   /* ---------------- Screen 1 state ---------------- */
-
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [email, setEmail] = useState('')
@@ -79,7 +73,6 @@ export default function Page() {
   /* ------------------------------------------------------------------ */
   /* INITIAL LOAD                                                       */
   /* ------------------------------------------------------------------ */
-
   useEffect(() => {
     const id = getClientUUID()
     setClientUUID(id)
@@ -142,7 +135,6 @@ export default function Page() {
   /* ------------------------------------------------------------------ */
   /* SCREEN 1 CONTINUE                                                   */
   /* ------------------------------------------------------------------ */
-
   const screen1Valid = isScreen1Valid({
     firstName,
     lastName,
@@ -191,7 +183,6 @@ export default function Page() {
   /* ------------------------------------------------------------------ */
   /* RENDER                                                             */
   /* ------------------------------------------------------------------ */
-
   if (loading) {
     return <div style={{ padding: 24 }}>Loading…</div>
   }
@@ -205,7 +196,6 @@ export default function Page() {
   }
 
   /* ---------------- Screen 1 ---------------- */
-
   if (step === 'screen1') {
     return (
       <div style={{ padding: 24, maxWidth: 480 }}>
@@ -242,9 +232,9 @@ export default function Page() {
         />
 
         <input
-          placeholder="Approval code (e.g. A-123456789012)"
+          placeholder="Approval code (e.g. 2-163295213558)"
           value={approvalCode}
-          onChange={e => setApprovalCode(e.target.value.toUpperCase())}
+          onChange={e => setApprovalCode(e.target.value.trim())}
         />
 
         <div style={{ marginTop: 16 }}>
@@ -258,7 +248,7 @@ export default function Page() {
 
         {!screen1Valid && (
           <p style={{ color: '#666', marginTop: 8 }}>
-            All fields are required and must be valid to continue.
+            All fields are required. Approval code must be 1 digit (not 0), dash, 12 digits.
           </p>
         )}
       </div>
@@ -266,7 +256,6 @@ export default function Page() {
   }
 
   /* ---------------- Next screen placeholder ---------------- */
-
   return (
     <div style={{ padding: 24 }}>
       <h2>Next screen</h2>
