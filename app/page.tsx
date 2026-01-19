@@ -168,10 +168,13 @@ export default function AgedCareApp() {
           .eq('status', 'Available')
         if (error) throw error
 
+        // ---------- Guard: only map if patient exists ----------
+        if (!patient) return
+
         const matchedBeds = bedData
           .map((bed: Bed) => ({
             ...bed,
-            distance_km: calculateDistanceKm(patient.preferred_suburb!, bed.suburb)
+            distance_km: calculateDistanceKm(patient.preferred_suburb, bed.suburb)
           }))
           .filter(bed => {
             const withinDistance = bed.distance_km! <= patient.max_distance_km!
