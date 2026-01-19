@@ -1,247 +1,263 @@
-
 'use client'
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
-/* ------------------------------------------------------------------ */
-/* SUPABASE CLIENT                                                     */
-/* ------------------------------------------------------------------ */
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-/* ------------------------------------------------------------------ */
-/* HELPERS                                                             */
-/* ------------------------------------------------------------------ */
-function getClientUUID(): string {
-  let id = localStorage.getItem('client_uuid')
-  if (!id) {
-    id = crypto.randomUUID()
-    localStorage.setItem('client_uuid', id)
-  }
-  return id
+type Patient = {
+  id: string
+  client_uuid: string
+  first_name: string
+  last_name: string
+  email: string
+  phone: string
+  hospital: string
+  approval_code: string
+  preferred_suburb: string | null
+  max_distance_km: number | null
+  rad_budget: number | null
+  dap_budget: number | null
 }
 
-const approvalCodeRegex = /^[1-9]-\d{12}$/
-
-const isValidEmail = (email: string) => /\S+@\S+\.\S+/.test(email)
-
-const parseCurrency = (value: string): number | null => {
-  const numeric = value.replace(/[^0-9]/g, '')
-  return numeric ? Number(numeric) : null
-}
-
-const formatCurrency = (value: string) => {
-  const numeric = value.replace(/[^0-9]/g, '')
-  if (!numeric) return ''
-  return `$${Number(numeric).toLocaleString('en-AU')}`
-}
-
-/* ------------------------------------------------------------------ */
-/* PAGE                                                                */
-/* ------------------------------------------------------------------ */
-export default function Page() {
-  const [clientUUID, setClientUUID] = useState<string | null>(null)
+export default function Screen2() {
+  const [patient, setPatient] = useState<Patient | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const [step, setStep] = useState<'screen1' | 'screen2' | 'done'>('screen1')
-
-  /* ---------------- SCREEN 1 ---------------- */
-  const [firstName, setFirstName] = useState('')
-  const [lastName, setLastName] = useState('')
-  const [email, setEmail] = useState('')
-  const [mobile, setMobile] = useState('')
-  const [hospital, setHospital] = useState('')
-  const [approvalCode, setApprovalCode] = useState('')
-
-  /* ---------------- SCREEN 2 ---------------- */
-  const [radInput, setRadInput] = useState('')
-  const [preferredSuburb, setPreferredSuburb] = useState('')
-  const [maxDistance, setMaxDistance] = useState('')
-
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
 
-  /* ------------------------------------------------------------------ */
-  /* LOAD OR CREATE PATIENT                                             */
-  /* ------------------------------------------------------------------ */
+  const [step, setStep] = useState<'form' | 'done'>('form')
+
+  const clientUUID =
+    typeof window !== 'undefined'
+      ? localStorage.getItem('client_uuid')
+      : null
+
   useEffect(() => {
-    const uuid = getClientUUID()
-    setClientUUID(uuid)
-    loadPatient(uuid)
-  }, [])
+    async function loadPatient() {
+      if (!clientUUID) {
+        setError('Missing client UUID')
+        setLoading(false)
+        return
+      }
 
-  async function loadPatient(uuid: string) {
-    setLoading(true)
+      const { data, error } = await supabase
+        .from('patients')
+        .select('*')
+        .eq('client_uuid', clientUUID)
+        .single()
 
-    const { data, error } = await supabase
+      if (error) {
+        setError('Error loading patient: ' + error.message)
+      } else {
+        setPatient(data)
+      }
+      setLoading(false)
+    }
+
+    loadPatient()
+  }, [clientUUID])
+
+  const handleSave = async () => {
+    if (!patient) return
+
+    // Validation
+    if (
+      !patient.first_name ||
+      !patient.last_name ||
+      !patient.email ||
+      !patient.phone ||
+      !patient.hospital
+    ) {
+      alert('Please fill all required fields')
+      return
+    }
+
+    const approvalCodePattern = /^[1-9]{1}-\d{12}$/
+    if (!approvalCodePattern.test(patient.approval_code)) {
+      alert(
+        'Approval code must be 1 digit (not 0) - dash - 12 digits, e.g. 2-123456789012'
+      )
+      return
+    }
+
+    setSaving(true)
+    setError('')
+
+    const { error } = await supabase
       .from('patients')
-      .select('*')
-      .eq('client_uuid', uuid)
-      .maybeSingle()
+      .update({
+        first_name: patient.first_name,
+        last_name: patient.last_name,
+        email: patient.email,
+        phone: patient.phone,
+        hospital: patient.hospital,
+        approval_code: patient.approval_code,
+        preferred_suburb: patient.preferred_suburb,
+        max_distance_km: patient.max_distance_km,
+        rad_budget: patient.rad_budget,
+        dap_budget: patient.dap_budget
+      })
+      .eq('client_uuid', patient.client_uuid)
+
+    setSaving(false)
 
     if (error) {
-      setError('Error loading patient')
-      setLoading(false)
-      return
+      console.error(error)
+      setError('Failed to save preferences: ' + error.message)
+    } else {
+      setStep('done')
     }
-
-    if (!data) {
-      await supabase.from('patients').insert({
-        client_uuid: uuid,
-        status: 'draft'
-      })
-      setLoading(false)
-      return
-    }
-
-    setFirstName(data.first_name || '')
-    setLastName(data.last_name || '')
-    setEmail(data.email || '')
-    setMobile(data.mobile || '')
-    setHospital(data.hospital || '')
-    setApprovalCode(data.approval_code || '')
-
-    if (data.rad_or_dap) {
-      setRadInput(`$${Number(data.rad_or_dap).toLocaleString('en-AU')}`)
-    }
-
-    setPreferredSuburb(data.preferred_suburb || '')
-    setMaxDistance(data.max_travel_distance?.toString() || '')
-
-    if (data.status === 'ready_to_match') setStep('done')
-    else if (data.status === 'onboarded') setStep('screen2')
-
-    setLoading(false)
   }
 
-  /* ------------------------------------------------------------------ */
-  /* VALIDATION                                                         */
-  /* ------------------------------------------------------------------ */
-  const screen1Valid =
-    firstName.trim() &&
-    lastName.trim() &&
-    isValidEmail(email) &&
-    mobile.trim() &&
-    hospital.trim() &&
-    approvalCodeRegex.test(approvalCode)
+  if (loading) return <p>Loading patient info…</p>
+  if (error) return <p style={{ color: 'red' }}>{error}</p>
+  if (!patient) return <p>No patient found</p>
 
-  const screen2Valid =
-    parseCurrency(radInput) !== null &&
-    preferredSuburb.trim() &&
-    Number(maxDistance) > 0
-
-  /* ------------------------------------------------------------------ */
-  /* ACTIONS                                                            */
-  /* ------------------------------------------------------------------ */
-  async function saveScreen1() {
-    if (!clientUUID || !screen1Valid) return
-    setSaving(true)
-
-    const { error } = await supabase
-      .from('patients')
-      .update({
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        email: email.trim(),
-        mobile: mobile.trim(),
-        hospital: hospital.trim(),
-        approval_code: approvalCode.trim(),
-        status: 'onboarded'
-      })
-      .eq('client_uuid', clientUUID)
-
-    setSaving(false)
-    if (!error) setStep('screen2')
-  }
-
-  async function saveScreen2() {
-    if (!clientUUID || !screen2Valid) return
-    setSaving(true)
-
-    const { error } = await supabase
-      .from('patients')
-      .update({
-        rad_or_dap: parseCurrency(radInput),
-        preferred_suburb: preferredSuburb.trim(),
-        max_travel_distance: Number(maxDistance),
-        status: 'ready_to_match'
-      })
-      .eq('client_uuid', clientUUID)
-
-    setSaving(false)
-    if (!error) setStep('done')
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* RENDER                                                             */
-  /* ------------------------------------------------------------------ */
-  if (loading) return <div style={{ padding: 24 }}>Loading…</div>
-  if (error) return <div style={{ padding: 24, color: 'red' }}>{error}</div>
-
-  /* ---------------- SCREEN 1 ---------------- */
-  if (step === 'screen1') {
+  if (step === 'done')
     return (
-      <div style={{ padding: 24, maxWidth: 480 }}>
-        <h2>Patient details</h2>
-
-        <input placeholder="First name" value={firstName} onChange={e => setFirstName(e.target.value)} />
-        <input placeholder="Last name" value={lastName} onChange={e => setLastName(e.target.value)} />
-        <input placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
-        <input placeholder="Mobile phone" value={mobile} onChange={e => setMobile(e.target.value)} />
-        <input placeholder="Hospital" value={hospital} onChange={e => setHospital(e.target.value)} />
-        <input
-          placeholder="Approval code (e.g. 2-163295213558)"
-          value={approvalCode}
-          onChange={e => setApprovalCode(e.target.value.trim())}
-        />
-
-        <button disabled={!screen1Valid || saving} onClick={saveScreen1}>
-          {saving ? 'Saving…' : 'Continue'}
-        </button>
+      <div style={{ padding: 24 }}>
+        <h2>Preferences saved!</h2>
+        <p>You can now proceed to view available beds.</p>
       </div>
     )
-  }
 
-  /* ---------------- SCREEN 2 ---------------- */
-  if (step === 'screen2') {
-    return (
-      <div style={{ padding: 24, maxWidth: 480 }}>
-        <h2>Care preferences</h2>
-
-        <input
-          placeholder="RAD or DAP ($)"
-          value={radInput}
-          onChange={e => setRadInput(formatCurrency(e.target.value))}
-        />
-
-        <input
-          placeholder="Preferred suburb"
-          value={preferredSuburb}
-          onChange={e => setPreferredSuburb(e.target.value)}
-        />
-
-        <input
-          placeholder="Max distance willing to travel (km)"
-          type="number"
-          value={maxDistance}
-          onChange={e => setMaxDistance(e.target.value)}
-        />
-
-        <button disabled={!screen2Valid || saving} onClick={saveScreen2}>
-          {saving ? 'Saving…' : 'See available beds'}
-        </button>
-      </div>
-    )
-  }
-
-  /* ---------------- DONE ---------------- */
   return (
     <div style={{ padding: 24 }}>
-      <h2>Ready to match</h2>
-      <p>We’ll now show bed opportunities that fit your criteria.</p>
+      <h2>Step 2: Set your preferences</h2>
+
+      <div>
+        <label>First Name*</label>
+        <input
+          type="text"
+          value={patient.first_name}
+          onChange={e =>
+            setPatient({ ...patient, first_name: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Last Name*</label>
+        <input
+          type="text"
+          value={patient.last_name}
+          onChange={e =>
+            setPatient({ ...patient, last_name: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Email*</label>
+        <input
+          type="email"
+          value={patient.email}
+          onChange={e =>
+            setPatient({ ...patient, email: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Phone*</label>
+        <input
+          type="text"
+          value={patient.phone}
+          onChange={e =>
+            setPatient({ ...patient, phone: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Hospital*</label>
+        <input
+          type="text"
+          value={patient.hospital}
+          onChange={e =>
+            setPatient({ ...patient, hospital: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Approval Code*</label>
+        <input
+          type="text"
+          placeholder="2-123456789012"
+          value={patient.approval_code}
+          onChange={e =>
+            setPatient({ ...patient, approval_code: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Preferred Suburb</label>
+        <input
+          type="text"
+          value={patient.preferred_suburb || ''}
+          onChange={e =>
+            setPatient({ ...patient, preferred_suburb: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Maximum Distance (km)</label>
+        <input
+          type="number"
+          value={patient.max_distance_km || ''}
+          onChange={e =>
+            setPatient({
+              ...patient,
+              max_distance_km: parseInt(e.target.value)
+            })
+          }
+        />
+      </div>
+
+      <div>
+        <label>RAD Budget</label>
+        <input
+          type="number"
+          step="0.01"
+          value={patient.rad_budget || ''}
+          onChange={e =>
+            setPatient({
+              ...patient,
+              rad_budget: parseFloat(e.target.value)
+            })
+          }
+        />
+      </div>
+
+      <div>
+        <label>DAP Budget</label>
+        <input
+          type="number"
+          step="0.01"
+          value={patient.dap_budget || ''}
+          onChange={e =>
+            setPatient({
+              ...patient,
+              dap_budget: parseFloat(e.target.value)
+            })
+          }
+        />
+      </div>
+
+      <button
+        style={{ marginTop: 20 }}
+        onClick={handleSave}
+        disabled={saving}
+      >
+        {saving ? 'Saving…' : 'Continue'}
+      </button>
     </div>
   )
 }
