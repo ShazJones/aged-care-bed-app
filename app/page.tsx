@@ -17,7 +17,7 @@ type Patient = {
   mobile: string
   hospital: string
   approval_code: string
-  preferred_suburb: string
+  preferred_suburb?: string
   max_distance_km?: number
   rad_budget?: number
   dap_budget?: number
@@ -157,7 +157,7 @@ export default function AgedCareApp() {
 
   // ------------------- Load Beds -------------------
   useEffect(() => {
-    if (step !== 'screen3' || !patient) return
+    if (step !== 'screen3' || !patient || !patient.preferred_suburb || !patient.max_distance_km) return
 
     async function loadBeds() {
       setLoading(true)
@@ -168,7 +168,6 @@ export default function AgedCareApp() {
           .eq('status', 'Available')
         if (error) throw error
 
-        // ---------- Guard: patient is guaranteed to have preferred_suburb ----------
         const matchedBeds = bedData
           .map((bed: Bed) => ({
             ...bed,
