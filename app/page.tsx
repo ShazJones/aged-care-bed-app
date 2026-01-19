@@ -166,15 +166,18 @@ export default function AgedCareApp() {
           .from('beds')
           .select('*')
           .eq('status', 'Available')
+
         if (error) throw error
 
         const matchedBeds = bedData
+          .filter(bed => bed.suburb) // only beds with valid suburb
           .map((bed: Bed) => ({
             ...bed,
             distance_km: calculateDistanceKm(patient.preferred_suburb!, bed.suburb)
           }))
           .filter(bed => {
-            const withinDistance = bed.distance_km! <= patient.max_distance_km!
+            if (!bed.distance_km) return false
+            const withinDistance = bed.distance_km <= patient.max_distance_km!
             const radOk = !patient.rad_budget || !bed.rad || bed.rad <= patient.rad_budget
             const dapOk = !patient.dap_budget || !bed.dap || bed.dap <= patient.dap_budget
             return withinDistance && (radOk || dapOk)
@@ -192,8 +195,7 @@ export default function AgedCareApp() {
 
   // ------------------- Distance Calculation Placeholder -------------------
   const calculateDistanceKm = (suburbA: string, suburbB: string) => {
-    // Placeholder: random 5-30 km for MVP
-    return Math.floor(Math.random() * 26) + 5
+    return Math.floor(Math.random() * 26) + 5 // 5-30 km random distance
   }
 
   // ------------------- Register Interest -------------------
