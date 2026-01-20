@@ -28,7 +28,7 @@ type Bed = {
   distance_km?: number
 }
 
-// Example suburb coordinates (lat, lon)
+// Suburb coordinates (lat, lon)
 const SUBURB_COORDS: Record<string, [number, number]> = {
   landsdale: [-31.7885, 115.8477],
   perth: [-31.9505, 115.8605],
@@ -38,7 +38,7 @@ const SUBURB_COORDS: Record<string, [number, number]> = {
   corrimal: [-34.4017, 150.9103],
 }
 
-// Haversine formula with proper lowercase lookup
+// Haversine formula
 function calculateDistanceKm(suburb1: string, suburb2: string): number {
   const key1 = suburb1.trim().toLowerCase()
   const key2 = suburb2.trim().toLowerCase()
@@ -47,7 +47,7 @@ function calculateDistanceKm(suburb1: string, suburb2: string): number {
   const coord2 = SUBURB_COORDS[key2]
 
   if (!coord1 || !coord2) {
-    console.log('Missing coordinates:', suburb1, suburb2)
+    console.log('Missing coordinates for:', suburb1, suburb2)
     return Infinity
   }
 
@@ -63,7 +63,7 @@ function calculateDistanceKm(suburb1: string, suburb2: string): number {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-  const R = 6371 // km
+  const R = 6371
   return R * c
 }
 
@@ -133,8 +133,10 @@ export default function Home() {
   if (error) return <div>{error}</div>
   if (!patient) return <div>No patient data found</div>
 
+  // Filter matched beds
   const matchedBeds = beds.filter((bed) => {
-    if (!bed.distance_km || !patient.max_distance_km) return false
+    // Only exclude if distance_km or max_distance_km is undefined
+    if (bed.distance_km === undefined || patient.max_distance_km === undefined) return false
     const withinDistance = bed.distance_km <= patient.max_distance_km
 
     const withinBudget =
@@ -172,7 +174,9 @@ export default function Home() {
         <p>
           No beds currently available within {patient.max_distance_km} km of{' '}
           {patient.preferred_suburb} for your{' '}
-          {patient.dap_budget ? `DAP budget of $${patient.dap_budget}` : `RAD budget of $${patient.rad_budget}`}.
+          {patient.dap_budget !== null
+            ? `DAP budget of $${patient.dap_budget}`
+            : `RAD budget of $${patient.rad_budget}`}.
           <br />
           The app updates frequently — please check back soon.
         </p>
