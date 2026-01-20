@@ -3,9 +3,13 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
+/* ============================
+   Types
+============================ */
 type Patient = {
   id: string
   client_uuid: string
+
   first_name: string | null
   last_name: string | null
   email: string | null
@@ -30,6 +34,37 @@ type Bed = {
   distance_km?: number
 }
 
+type Suburb = {
+  name: string
+  lat: number
+  lng: number
+}
+
+/* ============================
+   Distance (Haversine)
+============================ */
+function calculateDistanceKm(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+) {
+  const R = 6371
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLng = ((lng2 - lng1) * Math.PI) / 180
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2
+
+  return Math.round((R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))) * 10) / 10
+}
+
+/* ============================
+   Page
+============================ */
 export default function Page() {
   const [patient, setPatient] = useState<Patient | null>(null)
   const [beds, setBeds] = useState<Bed[]>([])
@@ -38,9 +73,9 @@ export default function Page() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  /* ------------------------------
-     Load or create patient
-  ------------------------------ */
+  /* ============================
+     Load / create patient
+  ============================ */
   useEffect(() => {
     const init = async () => {
       let client_uuid = localStorage.getItem('client_uuid')
@@ -50,7 +85,7 @@ export default function Page() {
         localStorage.setItem('client_uuid', client_uuid)
       }
 
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('patients')
         .select('*')
         .eq('client_uuid', client_uuid)
@@ -62,14 +97,14 @@ export default function Page() {
         return
       }
 
-      const { data: created, error: createError } = await supabase
+      const { data: created, error } = await supabase
         .from('patients')
         .insert({ client_uuid })
         .select()
         .single()
 
-      if (createError) {
-        setError('Error creating patient')
+      if (error) {
+        setError('Failed to create patient')
       } else {
         setPatient(created)
       }
@@ -80,9 +115,9 @@ export default function Page() {
     init()
   }, [])
 
-  /* ------------------------------
+  /* ============================
      Derive screen from data
-  ------------------------------ */
+  ============================ */
   useEffect(() => {
     if (!patient) return
 
@@ -104,38 +139,64 @@ export default function Page() {
     else setScreen(3)
   }, [patient])
 
-  /* ------------------------------
-     Load beds (Screen 3 only)
-  ------------------------------ */
+  /* ============================
+     Load beds + distance match
+  ============================ */
   useEffect(() => {
     if (screen !== 3 || !patient) return
 
     const loadBeds = async () => {
-      const { data } = await supabase
+      const { data: suburbs } = await supabase
+        .from('suburbs')
+        .select('*')
+
+      if (!suburbs) return
+
+      const suburbMap: Record<string, Suburb> = {}
+      suburbs.forEach(s => {
+        suburbMap[s.name] = s
+      })
+
+      const patientSuburb = suburbMap[patient.preferred_suburb!]
+      if (!patientSuburb) return
+
+      const { data: bedsData } = await supabase
         .from('beds')
         .select('*')
         .eq('status', 'Available')
 
-      if (!data) return
+      if (!bedsData) return
 
-      const withDistance = data.map((bed: Bed) => ({
-        ...bed,
-        distance_km: 0 // placeholder until suburb distance table added
-      }))
+      const matched = bedsData
+        .map((bed: Bed) => {
+          const bedSuburb = suburbMap[bed.suburb]
+          if (!bedSuburb) return null
 
-      setBeds(withDistance)
+          const distance = calculateDistanceKm(
+            patientSuburb.lat,
+            patientSuburb.lng,
+            bedSuburb.lat,
+            bedSuburb.lng
+          )
+
+          return { ...bed, distance_km: distance }
+        })
+        .filter((b): b is Bed => b !== null)
+        .filter(b => b.distance_km! <= patient.max_distance_km!)
+        .sort((a, b) => a.distance_km! - b.distance_km!)
+
+      setBeds(matched)
     }
 
     loadBeds()
   }, [screen, patient])
 
-  /* ------------------------------
-     Save helpers
-  ------------------------------ */
+  /* ============================
+     Save helper
+  ============================ */
   const updatePatient = async (updates: Partial<Patient>) => {
     if (!patient) return
     setSaving(true)
-    setError(null)
 
     const { data, error } = await supabase
       .from('patients')
@@ -144,97 +205,48 @@ export default function Page() {
       .select()
       .single()
 
-    if (error) {
-      setError('Failed to save details')
-    } else {
-      setPatient(data)
-    }
-
+    if (!error) setPatient(data)
     setSaving(false)
   }
 
   if (loading) return <p>Loading…</p>
   if (error) return <p style={{ color: 'red' }}>{error}</p>
 
-  /* ==============================
-     SCREEN 1 — Onboarding
-  ============================== */
-  if (screen === 1) {
+  /* ============================
+     SCREEN 3 — Bed feed
+  ============================ */
+  if (screen === 3 && patient) {
     return (
       <div>
-        <h1>Patient details</h1>
+        <h1>Available beds</h1>
 
-        <input placeholder="First name" onBlur={e => updatePatient({ first_name: e.target.value })} />
-        <input placeholder="Last name" onBlur={e => updatePatient({ last_name: e.target.value })} />
-        <input placeholder="Email" onBlur={e => updatePatient({ email: e.target.value })} />
-        <input placeholder="Mobile" onBlur={e => updatePatient({ mobile: e.target.value })} />
-        <input placeholder="Hospital" onBlur={e => updatePatient({ hospital: e.target.value })} />
-        <input
-          placeholder="Approval code (e.g. 2-123456789012)"
-          onBlur={e => updatePatient({ approval_code: e.target.value })}
-        />
+        {beds.length === 0 && (
+          <p>
+            No beds currently available within {patient.max_distance_km} km of{' '}
+            {patient.preferred_suburb} for your{' '}
+            {patient.rad_budget
+              ? `RAD budget of $${patient.rad_budget.toLocaleString()}`
+              : `DAP budget of $${patient.dap_budget?.toFixed(2)} per day`}
+            .
+            <br />
+            This app updates as new beds become available.
+            Please check back tomorrow.
+          </p>
+        )}
 
-        {saving && <p>Saving…</p>}
+        {beds.map(bed => (
+          <div key={bed.id} style={{ border: '1px solid #ccc', padding: 12, marginBottom: 12 }}>
+            <strong>{bed.facility_name}</strong>
+            <p>{bed.suburb} · {bed.distance_km} km away</p>
+            <p>{bed.room_type}</p>
+            {bed.rad && <p>RAD: ${bed.rad.toLocaleString()}</p>}
+            {bed.dap && <p>DAP: ${bed.dap.toFixed(2)} / day</p>}
+            <button>Register Interest</button>
+          </div>
+        ))}
       </div>
     )
   }
 
-  /* ==============================
-     SCREEN 2 — Preferences
-  ============================== */
-  if (screen === 2) {
-    return (
-      <div>
-        <h1>Care preferences</h1>
-
-        <input
-          placeholder="Preferred suburb"
-          onBlur={e => updatePatient({ preferred_suburb: e.target.value })}
-        />
-
-        <input
-          type="number"
-          placeholder="Max distance (km)"
-          onBlur={e => updatePatient({ max_distance_km: Number(e.target.value) })}
-        />
-
-        <input
-          type="number"
-          placeholder="RAD budget ($)"
-          onBlur={e => updatePatient({ rad_budget: Number(e.target.value) })}
-        />
-
-        <input
-          type="number"
-          step="0.01"
-          placeholder="DAP budget ($/day)"
-          onBlur={e => updatePatient({ dap_budget: Number(e.target.value) })}
-        />
-
-        {saving && <p>Saving…</p>}
-      </div>
-    )
-  }
-
-  /* ==============================
-     SCREEN 3 — Bed Feed
-  ============================== */
-  return (
-    <div>
-      <h1>Available beds</h1>
-
-      {beds.length === 0 && <p>No beds currently available</p>}
-
-      {beds.map(bed => (
-        <div key={bed.id} style={{ border: '1px solid #ccc', marginBottom: 12, padding: 12 }}>
-          <strong>{bed.facility_name}</strong>
-          <p>{bed.suburb}</p>
-          <p>{bed.room_type}</p>
-          {bed.rad && <p>RAD: ${bed.rad.toLocaleString()}</p>}
-          {bed.dap && <p>DAP: ${bed.dap.toFixed(2)} / day</p>}
-          <button>Register Interest</button>
-        </div>
-      ))}
-    </div>
-  )
+  return <p>Preparing your bed feed…</p>
 }
