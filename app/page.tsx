@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
-// Minimal type definitions
 type Patient = {
   id: string
   first_name: string
@@ -26,36 +25,36 @@ type Bed = {
   rad: number | null
   dap: number | null
   status: string
-  available_from_date?: string
   distance_km?: number
 }
 
-// Example suburb coordinates (longitude/latitude)
-const SUBURB_COORDS: Record<string, { lat: number; lon: number }> = {
-  Perth: { lat: -31.9505, lon: 115.8605 },
-  Landsdale: { lat: -31.803, lon: 115.843 },
-  Joondalup: { lat: -31.745, lon: 115.768 },
-  Scarborough: { lat: -31.891, lon: 115.756 },
-  Wollongong: { lat: -34.427, lon: 150.893 },
-  Corrimal: { lat: -34.333, lon: 150.933 }
+// Example suburb coordinates (lat, lon)
+const SUBURB_COORDS: Record<string, [number, number]> = {
+  Landsdale: [-31.7885, 115.8477],
+  Perth: [-31.9505, 115.8605],
+  Joondalup: [-31.7450, 115.7667],
+  Scarborough: [-31.8925, 115.7561],
+  Wollongong: [-34.4278, 150.8931],
+  Corrimal: [-34.4017, 150.9103],
 }
 
 // Haversine formula
-function calculateDistanceKm(from: string, to: string): number {
-  const origin = SUBURB_COORDS[from]
-  const dest = SUBURB_COORDS[to]
-  if (!origin || !dest) return Infinity
+function calculateDistanceKm(suburb1: string, suburb2: string): number {
+  const coord1 = SUBURB_COORDS[suburb1.trim().toLowerCase()] || SUBURB_COORDS[suburb1.trim()]
+  const coord2 = SUBURB_COORDS[suburb2.trim().toLowerCase()] || SUBURB_COORDS[suburb2.trim()]
+  if (!coord1 || !coord2) return Infinity
 
-  const toRad = (deg: number) => (deg * Math.PI) / 180
-  const R = 6371 // km
-  const dLat = toRad(dest.lat - origin.lat)
-  const dLon = toRad(dest.lon - origin.lon)
+  const toRad = (x: number) => (x * Math.PI) / 180
+  const [lat1, lon1] = coord1
+  const [lat2, lon2] = coord2
+
+  const dLat = toRad(lat2 - lat1)
+  const dLon = toRad(lon2 - lon1)
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(origin.lat)) *
-      Math.cos(toRad(dest.lat)) *
-      Math.sin(dLon / 2) ** 2
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  const R = 6371 // km
   return R * c
 }
 
@@ -65,7 +64,6 @@ export default function Home() {
   const [beds, setBeds] = useState<Bed[]>([])
   const [error, setError] = useState<string | null>(null)
 
-  // Fetch patient
   useEffect(() => {
     const client_uuid = localStorage.getItem('client_uuid')
     if (!client_uuid) {
@@ -75,6 +73,7 @@ export default function Home() {
     }
 
     const fetchPatient = async () => {
+      setLoading(true)
       const { data, error } = await supabase
         .from('patients')
         .select('*')
@@ -86,60 +85,65 @@ export default function Home() {
         setLoading(false)
         return
       }
-
       setPatient(data as Patient)
+      setLoading(false)
     }
 
     fetchPatient()
   }, [])
 
-  // Fetch beds after patient is loaded
   useEffect(() => {
     if (!patient) return
 
     const fetchBeds = async () => {
-      const { data, error } = await supabase
-        .from('beds')
-        .select('*')
-        .eq('status', 'open') // filter only open beds
+      const { data, error } = await supabase.from('beds').select('*').eq('status', 'open')
       if (error) {
-        setError('Error loading beds: ' + error.message)
-        setLoading(false)
+        console.error('Error loading beds:', error)
         return
       }
-      setBeds(data as Bed[])
-      setLoading(false)
+
+      const bedsData = (data as Bed[]).map((bed) => {
+        // Normalize suburb names for loose matching
+        const patientSuburbNorm = patient.preferred_suburb.trim().toLowerCase()
+        const bedSuburbNorm = bed.suburb.trim().toLowerCase()
+        const distance = calculateDistanceKm(patientSuburbNorm, bedSuburbNorm)
+        console.log('Bed:', bed.facility_name)
+        console.log('Suburb:', bed.suburb, 'Normalized:', bedSuburbNorm)
+        console.log('Distance km:', distance)
+        console.log('Patient max distance:', patient.max_distance_km)
+        console.log('Patient RAD budget:', patient.rad_budget)
+        console.log('Patient DAP budget:', patient.dap_budget)
+        console.log('Bed RAD:', bed.rad)
+        console.log('Bed DAP:', bed.dap)
+
+        return { ...bed, distance_km: distance }
+      })
+      setBeds(bedsData)
     }
 
     fetchBeds()
   }, [patient])
 
-  if (loading) return <div>Loading…</div>
+  if (loading) return <div>Loading your preferences…</div>
   if (error) return <div>{error}</div>
-  if (!patient) return <div>No patient found</div>
+  if (!patient) return <div>No patient data found</div>
 
-  // Map beds with distance
-  const bedsWithDistance = beds
-    .map((bed) => {
-      const distance = calculateDistanceKm(patient.preferred_suburb, bed.suburb)
-      return { ...bed, distance_km: distance }
-    })
-    .filter((bed) => {
-      if (!bed.distance_km) return false
-      // Budget filter
-      const withinBudget =
-        (patient.dap_budget !== null && bed.dap !== null && bed.dap <= patient.dap_budget) ||
-        (patient.rad_budget !== null && bed.rad !== null && bed.rad <= patient.rad_budget)
-      // Distance filter
-      const withinDistance = bed.distance_km <= patient.max_distance_km
-      return withinBudget && withinDistance
-    })
-    .sort((a, b) => (a.distance_km! - b.distance_km!)) // closest first
+  const matchedBeds = beds.filter((bed) => {
+    if (!bed.distance_km || !patient.max_distance_km) return false
+    const withinDistance = bed.distance_km <= patient.max_distance_km
+
+    const withinBudget =
+      (patient.dap_budget !== null && bed.dap !== null && bed.dap <= patient.dap_budget) ||
+      (patient.rad_budget !== null && bed.rad !== null && bed.rad <= patient.rad_budget)
+
+    return withinDistance && withinBudget
+  })
 
   return (
     <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
       <h1>Bed Finder — Step 3</h1>
-      <h2>Patient Preferences:</h2>
+
+      <h2>Your Preferences:</h2>
       <ul>
         <li>
           <strong>Name:</strong> {patient.first_name} {patient.last_name}
@@ -151,30 +155,32 @@ export default function Home() {
           <strong>Max Distance (km):</strong> {patient.max_distance_km}
         </li>
         <li>
-          <strong>RAD Budget:</strong> {patient.rad_budget !== null ? `$${patient.rad_budget}` : 'N/A'}
+          <strong>RAD Budget:</strong>{' '}
+          {patient.rad_budget !== null ? `$${patient.rad_budget}` : 'N/A'}
         </li>
         <li>
-          <strong>DAP Budget:</strong> {patient.dap_budget !== null ? `$${patient.dap_budget}` : 'N/A'}
+          <strong>DAP Budget:</strong>{' '}
+          {patient.dap_budget !== null ? `$${patient.dap_budget}` : 'N/A'}
         </li>
       </ul>
 
       <h2>Available Beds:</h2>
-      {bedsWithDistance.length === 0 ? (
-        <div>
-          No beds currently available.
-          <br />
-          There are no beds within {patient.max_distance_km} km of {patient.preferred_suburb} for your{' '}
-          {patient.dap_budget !== null ? `DAP budget of $${patient.dap_budget}` : `RAD budget of $${patient.rad_budget}`}.
+      {matchedBeds.length === 0 ? (
+        <p>
+          No beds currently available within {patient.max_distance_km} km of{' '}
+          {patient.preferred_suburb} for your{' '}
+          {patient.dap_budget ? `DAP budget of $${patient.dap_budget}` : `RAD budget of $${patient.rad_budget}`}.
           <br />
           The app updates frequently — please check back soon.
-        </div>
+        </p>
       ) : (
         <ul>
-          {bedsWithDistance.map((bed) => (
+          {matchedBeds.map((bed) => (
             <li key={bed.id}>
-              {bed.facility_name} — {bed.room_type} — {bed.suburb} —{' '}
-              {bed.distance_km?.toFixed(1)} km away —{' '}
+              {bed.facility_name} — {bed.suburb} — {bed.room_type} — Distance:{' '}
+              {bed.distance_km?.toFixed(1)} km —{' '}
               {bed.dap !== null ? `DAP $${bed.dap}` : `RAD $${bed.rad}`}
+              <button style={{ marginLeft: '1rem' }}>Register Interest</button>
             </li>
           ))}
         </ul>
