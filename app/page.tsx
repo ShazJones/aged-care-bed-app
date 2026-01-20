@@ -30,23 +30,32 @@ type Bed = {
 
 // Example suburb coordinates (lat, lon)
 const SUBURB_COORDS: Record<string, [number, number]> = {
-  Landsdale: [-31.7885, 115.8477],
-  Perth: [-31.9505, 115.8605],
-  Joondalup: [-31.7450, 115.7667],
-  Scarborough: [-31.8925, 115.7561],
-  Wollongong: [-34.4278, 150.8931],
-  Corrimal: [-34.4017, 150.9103],
+  landsdale: [-31.7885, 115.8477],
+  perth: [-31.9505, 115.8605],
+  joondalup: [-31.7450, 115.7667],
+  scarborough: [-31.8925, 115.7561],
+  wollongong: [-34.4278, 150.8931],
+  corrimal: [-34.4017, 150.9103],
 }
 
-// Haversine formula
+// Haversine formula with proper lowercase lookup
 function calculateDistanceKm(suburb1: string, suburb2: string): number {
-  const coord1 = SUBURB_COORDS[suburb1.trim().toLowerCase()] || SUBURB_COORDS[suburb1.trim()]
-  const coord2 = SUBURB_COORDS[suburb2.trim().toLowerCase()] || SUBURB_COORDS[suburb2.trim()]
-  if (!coord1 || !coord2) return Infinity
+  const key1 = suburb1.trim().toLowerCase()
+  const key2 = suburb2.trim().toLowerCase()
+
+  const coord1 = SUBURB_COORDS[key1]
+  const coord2 = SUBURB_COORDS[key2]
+
+  if (!coord1 || !coord2) {
+    console.log('Missing coordinates:', suburb1, suburb2)
+    return Infinity
+  }
 
   const toRad = (x: number) => (x * Math.PI) / 180
   const [lat1, lon1] = coord1
   const [lat2, lon2] = coord2
+
+  console.log('Calculating distance:', lat1, lon1, '->', lat2, lon2)
 
   const dLat = toRad(lat2 - lat1)
   const dLon = toRad(lon2 - lon1)
@@ -103,19 +112,15 @@ export default function Home() {
       }
 
       const bedsData = (data as Bed[]).map((bed) => {
-        // Normalize suburb names for loose matching
-        const patientSuburbNorm = patient.preferred_suburb.trim().toLowerCase()
-        const bedSuburbNorm = bed.suburb.trim().toLowerCase()
-        const distance = calculateDistanceKm(patientSuburbNorm, bedSuburbNorm)
+        const distance = calculateDistanceKm(patient.preferred_suburb, bed.suburb)
         console.log('Bed:', bed.facility_name)
-        console.log('Suburb:', bed.suburb, 'Normalized:', bedSuburbNorm)
+        console.log('Suburb:', bed.suburb)
         console.log('Distance km:', distance)
         console.log('Patient max distance:', patient.max_distance_km)
         console.log('Patient RAD budget:', patient.rad_budget)
         console.log('Patient DAP budget:', patient.dap_budget)
         console.log('Bed RAD:', bed.rad)
         console.log('Bed DAP:', bed.dap)
-
         return { ...bed, distance_km: distance }
       })
       setBeds(bedsData)
@@ -155,12 +160,10 @@ export default function Home() {
           <strong>Max Distance (km):</strong> {patient.max_distance_km}
         </li>
         <li>
-          <strong>RAD Budget:</strong>{' '}
-          {patient.rad_budget !== null ? `$${patient.rad_budget}` : 'N/A'}
+          <strong>RAD Budget:</strong> {patient.rad_budget !== null ? `$${patient.rad_budget}` : 'N/A'}
         </li>
         <li>
-          <strong>DAP Budget:</strong>{' '}
-          {patient.dap_budget !== null ? `$${patient.dap_budget}` : 'N/A'}
+          <strong>DAP Budget:</strong> {patient.dap_budget !== null ? `$${patient.dap_budget}` : 'N/A'}
         </li>
       </ul>
 
