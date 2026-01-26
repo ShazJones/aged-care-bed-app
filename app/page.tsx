@@ -32,7 +32,7 @@ type Bed = {
 const SUBURB_COORDS: Record<string, [number, number]> = {
   landsdale: [-31.7885, 115.8477],
   perth: [-31.9505, 115.8605],
-  joondalup: [-31.7450, 115.7667],
+  joondalup: [-31.745, 115.7667],
   scarborough: [-31.8925, 115.7561],
   wollongong: [-34.4278, 150.8931],
   corrimal: [-34.4017, 150.9103],
@@ -55,13 +55,13 @@ function calculateDistanceKm(suburb1: string, suburb2: string): number {
   const [lat1, lon1] = coord1
   const [lat2, lon2] = coord2
 
-  console.log('Calculating distance:', lat1, lon1, '->', lat2, lon2)
-
   const dLat = toRad(lat2 - lat1)
   const dLon = toRad(lon2 - lon1)
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) ** 2
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
   const R = 6371
   return R * c
@@ -73,6 +73,9 @@ export default function Home() {
   const [beds, setBeds] = useState<Bed[]>([])
   const [error, setError] = useState<string | null>(null)
 
+  const [registeringBedId, setRegisteringBedId] = useState<string | null>(null)
+  const [registeredBedIds, setRegisteredBedIds] = useState<string[]>([])
+
   useEffect(() => {
     const client_uuid = localStorage.getItem('client_uuid')
     if (!client_uuid) {
@@ -82,7 +85,6 @@ export default function Home() {
     }
 
     const fetchPatient = async () => {
-      setLoading(true)
       const { data, error } = await supabase
         .from('patients')
         .select('*')
@@ -94,6 +96,7 @@ export default function Home() {
         setLoading(false)
         return
       }
+
       setPatient(data as Patient)
       setLoading(false)
     }
@@ -105,43 +108,67 @@ export default function Home() {
     if (!patient) return
 
     const fetchBeds = async () => {
-      const { data, error } = await supabase.from('beds').select('*').eq('status', 'open')
+      const { data, error } = await supabase
+        .from('beds')
+        .select('*')
+        .eq('status', 'open')
+
       if (error) {
         console.error('Error loading beds:', error)
         return
       }
 
-      const bedsData = (data as Bed[]).map((bed) => {
-        const distance = calculateDistanceKm(patient.preferred_suburb, bed.suburb)
-        console.log('Bed:', bed.facility_name)
-        console.log('Suburb:', bed.suburb)
-        console.log('Distance km:', distance)
-        console.log('Patient max distance:', patient.max_distance_km)
-        console.log('Patient RAD budget:', patient.rad_budget)
-        console.log('Patient DAP budget:', patient.dap_budget)
-        console.log('Bed RAD:', bed.rad)
-        console.log('Bed DAP:', bed.dap)
-        return { ...bed, distance_km: distance }
-      })
-      setBeds(bedsData)
+      const bedsWithDistance = (data as Bed[]).map((bed) => ({
+        ...bed,
+        distance_km: calculateDistanceKm(
+          patient.preferred_suburb,
+          bed.suburb
+        ),
+      }))
+
+      setBeds(bedsWithDistance)
     }
 
     fetchBeds()
   }, [patient])
 
+  async function registerInterest(bedId: string) {
+    if (!patient) return
+
+    setRegisteringBedId(bedId)
+
+    const { error } = await supabase.from('bed_interests').insert({
+      patient_id: patient.id,
+      bed_id: bedId,
+    })
+
+    setRegisteringBedId(null)
+
+    if (error) {
+      console.error('Register interest error:', error)
+      alert('Unable to register interest. Please try again.')
+      return
+    }
+
+    setRegisteredBedIds((prev) => [...prev, bedId])
+  }
+
   if (loading) return <div>Loading your preferences…</div>
   if (error) return <div>{error}</div>
   if (!patient) return <div>No patient data found</div>
 
-  // Filter matched beds
   const matchedBeds = beds.filter((bed) => {
-    // Only exclude if distance_km or max_distance_km is undefined
-    if (bed.distance_km === undefined || patient.max_distance_km === undefined) return false
+    if (bed.distance_km === undefined) return false
+
     const withinDistance = bed.distance_km <= patient.max_distance_km
 
     const withinBudget =
-      (patient.dap_budget !== null && bed.dap !== null && bed.dap <= patient.dap_budget) ||
-      (patient.rad_budget !== null && bed.rad !== null && bed.rad <= patient.rad_budget)
+      (patient.dap_budget !== null &&
+        bed.dap !== null &&
+        bed.dap <= patient.dap_budget) ||
+      (patient.rad_budget !== null &&
+        bed.rad !== null &&
+        bed.rad <= patient.rad_budget)
 
     return withinDistance && withinBudget
   })
@@ -150,44 +177,57 @@ export default function Home() {
     <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
       <h1>Bed Finder — Step 3</h1>
 
-      <h2>Your Preferences:</h2>
+      <h2>Your Preferences</h2>
       <ul>
-        <li>
-          <strong>Name:</strong> {patient.first_name} {patient.last_name}
-        </li>
         <li>
           <strong>Preferred Suburb:</strong> {patient.preferred_suburb}
         </li>
         <li>
-          <strong>Max Distance (km):</strong> {patient.max_distance_km}
+          <strong>Max Distance:</strong> {patient.max_distance_km} km
         </li>
         <li>
-          <strong>RAD Budget:</strong> {patient.rad_budget !== null ? `$${patient.rad_budget}` : 'N/A'}
+          <strong>RAD Budget:</strong>{' '}
+          {patient.rad_budget ?? 'N/A'}
         </li>
         <li>
-          <strong>DAP Budget:</strong> {patient.dap_budget !== null ? `$${patient.dap_budget}` : 'N/A'}
+          <strong>DAP Budget:</strong>{' '}
+          {patient.dap_budget ?? 'N/A'}
         </li>
       </ul>
 
-      <h2>Available Beds:</h2>
+      <h2>Available Beds</h2>
+
       {matchedBeds.length === 0 ? (
         <p>
-          No beds currently available within {patient.max_distance_km} km of{' '}
-          {patient.preferred_suburb} for your{' '}
-          {patient.dap_budget !== null
-            ? `DAP budget of $${patient.dap_budget}`
-            : `RAD budget of $${patient.rad_budget}`}.
+          No beds currently available within {patient.max_distance_km} km
+          of {patient.preferred_suburb} for your budget.
           <br />
           The app updates frequently — please check back soon.
         </p>
       ) : (
         <ul>
           {matchedBeds.map((bed) => (
-            <li key={bed.id}>
-              {bed.facility_name} — {bed.suburb} — {bed.room_type} — Distance:{' '}
+            <li key={bed.id} style={{ marginBottom: '1rem' }}>
+              <strong>{bed.facility_name}</strong> — {bed.suburb} —{' '}
+              {bed.room_type} —{' '}
               {bed.distance_km?.toFixed(1)} km —{' '}
               {bed.dap !== null ? `DAP $${bed.dap}` : `RAD $${bed.rad}`}
-              <button style={{ marginLeft: '1rem' }}>Register Interest</button>
+
+              {registeredBedIds.includes(bed.id) ? (
+                <div style={{ color: 'green', marginTop: '0.5rem' }}>
+                  ✅ Interest registered. The provider will be in touch.
+                </div>
+              ) : (
+                <button
+                  style={{ marginLeft: '1rem' }}
+                  disabled={registeringBedId === bed.id}
+                  onClick={() => registerInterest(bed.id)}
+                >
+                  {registeringBedId === bed.id
+                    ? 'Registering…'
+                    : 'Register Interest'}
+                </button>
+              )}
             </li>
           ))}
         </ul>
