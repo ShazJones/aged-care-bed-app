@@ -5,12 +5,6 @@ import { supabase } from '@/lib/supabaseClient'
 
 type Patient = {
   id: string
-  first_name: string
-  last_name: string
-  email: string
-  mobile: string
-  hospital: string
-  approval_code: string
   preferred_suburb: string
   max_distance_km: number
   rad_budget: number | null
@@ -38,8 +32,8 @@ const SUBURB_COORDS: Record<string, [number, number]> = {
 }
 
 function calculateDistanceKm(a: string, b: string): number {
-  const c1 = SUBURB_COORDS[a.trim().toLowerCase()]
-  const c2 = SUBURB_COORDS[b.trim().toLowerCase()]
+  const c1 = SUBURB_COORDS[a.toLowerCase()]
+  const c2 = SUBURB_COORDS[b.toLowerCase()]
   if (!c1 || !c2) return Infinity
 
   const toRad = (x: number) => (x * Math.PI) / 180
@@ -57,7 +51,7 @@ function calculateDistanceKm(a: string, b: string): number {
   return 6371 * 2 * Math.atan2(Math.sqrt(aVal), Math.sqrt(1 - aVal))
 }
 
-export default function Home() {
+export default function Page() {
   const [loading, setLoading] = useState(true)
   const [patient, setPatient] = useState<Patient | null>(null)
   const [beds, setBeds] = useState<Bed[]>([])
@@ -65,27 +59,38 @@ export default function Home() {
   const [registeringBedId, setRegisteringBedId] = useState<string | null>(null)
 
   useEffect(() => {
-    const client_uuid = localStorage.getItem('client_uuid')
+    async function load() {
+      const client_uuid = localStorage.getItem('client_uuid')
+      if (!client_uuid) {
+        setLoading(false)
+        return
+      }
 
-    if (!client_uuid) {
-      setLoading(false)
-      return
-    }
-
-    async function loadPatient() {
-      const { data, error } = await supabase
+      // Load patient
+      const { data: patientData } = await supabase
         .from('patients')
         .select('*')
         .eq('client_uuid', client_uuid)
         .single()
 
-      if (error || !data) {
+      if (!patientData) {
         setLoading(false)
         return
       }
 
-      setPatient(data)
+      setPatient(patientData)
 
+      // 🔑 Load existing bed interests (FIX #2)
+      const { data: interests } = await supabase
+        .from('bed_interests')
+        .select('bed_id')
+        .eq('patient_id', patientData.id)
+
+      if (interests) {
+        setRegisteredBedIds(interests.map(i => i.bed_id))
+      }
+
+      // Load beds
       const { data: bedsData } = await supabase
         .from('beds')
         .select('*')
@@ -96,7 +101,7 @@ export default function Home() {
           bedsData.map((bed: Bed) => ({
             ...bed,
             distance_km: calculateDistanceKm(
-              data.preferred_suburb,
+              patientData.preferred_suburb,
               bed.suburb
             ),
           }))
@@ -106,11 +111,12 @@ export default function Home() {
       setLoading(false)
     }
 
-    loadPatient()
+    load()
   }, [])
 
   async function registerInterest(bedId: string) {
-    if (!patient) return
+    // 🔒 Hard guard against duplicates (FIX #3)
+    if (!patient || registeredBedIds.includes(bedId)) return
 
     setRegisteringBedId(bedId)
 
@@ -122,39 +128,25 @@ export default function Home() {
     setRegisteringBedId(null)
 
     if (!error) {
-      setRegisteredBedIds((prev) => [...prev, bedId])
+      // Immediately lock UI
+      setRegisteredBedIds(prev => [...prev, bedId])
     } else {
-      alert('Unable to register interest. Please try again.')
       console.error(error)
+      alert('Unable to register interest. Please try again.')
     }
   }
 
-  if (loading) {
-    return <div>Loading…</div>
-  }
+  if (loading) return <div>Loading…</div>
 
-  // 🔑 SAFETY FIX: restart onboarding without routing or 404
   if (!patient) {
-    return (
-      <div style={{ padding: '2rem' }}>
-        <h1>Find an Aged Care Bed</h1>
-        <p>Let’s get started.</p>
-        <button
-          onClick={() => {
-            localStorage.clear()
-            window.location.reload()
-          }}
-        >
-          Start onboarding
-        </button>
-      </div>
-    )
+    return <div>Please start onboarding.</div>
   }
 
-  const matchedBeds = beds.filter((bed) => {
+  const matchedBeds = beds.filter(bed => {
     if (bed.distance_km === undefined) return false
 
     const withinDistance = bed.distance_km <= patient.max_distance_km
+
     const withinBudget =
       (patient.dap_budget !== null &&
         bed.dap !== null &&
@@ -171,25 +163,21 @@ export default function Home() {
       <h1>Available Beds</h1>
 
       {matchedBeds.length === 0 ? (
-        <p>
-          No beds currently available within {patient.max_distance_km} km
-          of {patient.preferred_suburb}.
-        </p>
+        <p>No suitable beds currently available.</p>
       ) : (
         <ul>
-          {matchedBeds.map((bed) => (
+          {matchedBeds.map(bed => (
             <li key={bed.id} style={{ marginBottom: '1rem' }}>
               <strong>{bed.facility_name}</strong> — {bed.suburb} —{' '}
-              {bed.distance_km?.toFixed(1)} km —{' '}
-              {bed.dap !== null ? `DAP $${bed.dap}` : `RAD $${bed.rad}`}
+              {bed.distance_km?.toFixed(1)} km
 
               {registeredBedIds.includes(bed.id) ? (
-                <div style={{ color: 'green' }}>
+                <div style={{ color: 'green', marginTop: 4 }}>
                   ✅ Interest registered. The provider will be in touch.
                 </div>
               ) : (
                 <button
-                  style={{ marginLeft: '1rem' }}
+                  style={{ marginLeft: 12 }}
                   disabled={registeringBedId === bed.id}
                   onClick={() => registerInterest(bed.id)}
                 >
