@@ -5,10 +5,13 @@ import { supabase } from '@/lib/supabaseClient'
 
 type Patient = {
   id: string
-  preferred_suburb: string
-  max_distance_km: number
-  rad_budget: number | null
-  dap_budget: number | null
+  name: string
+  email: string
+  mobile: string
+  preferred_suburb?: string
+  max_distance_km?: number
+  rad_budget?: number | null
+  dap_budget?: number | null
 }
 
 type Bed = {
@@ -19,177 +22,247 @@ type Bed = {
   rad: number | null
   dap: number | null
   status: string
-  distance_km?: number
 }
 
-const SUBURB_COORDS: Record<string, [number, number]> = {
-  landsdale: [-31.7885, 115.8477],
-  perth: [-31.9505, 115.8605],
-  joondalup: [-31.745, 115.7667],
-  scarborough: [-31.8925, 115.7561],
-  wollongong: [-34.4278, 150.8931],
-  corrimal: [-34.4017, 150.9103],
-}
-
-function calculateDistanceKm(a: string, b: string): number {
-  const c1 = SUBURB_COORDS[a.toLowerCase()]
-  const c2 = SUBURB_COORDS[b.toLowerCase()]
-  if (!c1 || !c2) return Infinity
-
-  const toRad = (x: number) => (x * Math.PI) / 180
-  const [lat1, lon1] = c1
-  const [lat2, lon2] = c2
-
-  const dLat = toRad(lat2 - lat1)
-  const dLon = toRad(lon2 - lon1)
-  const aVal =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) ** 2
-
-  return 6371 * 2 * Math.atan2(Math.sqrt(aVal), Math.sqrt(1 - aVal))
-}
+type Screen = 'onboarding' | 'preferences' | 'results' | 'interest_done'
 
 export default function Page() {
-  const [loading, setLoading] = useState(true)
+  const [screen, setScreen] = useState<Screen>('onboarding')
   const [patient, setPatient] = useState<Patient | null>(null)
   const [beds, setBeds] = useState<Bed[]>([])
-  const [registeredBedIds, setRegisteredBedIds] = useState<string[]>([])
-  const [registeringBedId, setRegisteringBedId] = useState<string | null>(null)
+  const [selectedBed, setSelectedBed] = useState<Bed | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  /* ---------------- ENTRY CHECK ---------------- */
 
   useEffect(() => {
-    async function load() {
-      const client_uuid = localStorage.getItem('client_uuid')
-      if (!client_uuid) {
+    const init = async () => {
+      const patientId = localStorage.getItem('patient_id')
+      if (!patientId) {
+        setScreen('onboarding')
         setLoading(false)
         return
       }
 
-      // Load patient
-      const { data: patientData } = await supabase
+      const { data, error } = await supabase
         .from('patients')
         .select('*')
-        .eq('client_uuid', client_uuid)
+        .eq('id', patientId)
         .single()
 
-      if (!patientData) {
+      if (error || !data) {
+        localStorage.removeItem('patient_id')
+        setScreen('onboarding')
         setLoading(false)
         return
       }
 
-      setPatient(patientData)
-
-      // 🔑 Load existing bed interests (FIX #2)
-      const { data: interests } = await supabase
-        .from('bed_interests')
-        .select('bed_id')
-        .eq('patient_id', patientData.id)
-
-      if (interests) {
-        setRegisteredBedIds(interests.map(i => i.bed_id))
-      }
-
-      // Load beds
-      const { data: bedsData } = await supabase
-        .from('beds')
-        .select('*')
-        .eq('status', 'open')
-
-      if (bedsData) {
-        setBeds(
-          bedsData.map((bed: Bed) => ({
-            ...bed,
-            distance_km: calculateDistanceKm(
-              patientData.preferred_suburb,
-              bed.suburb
-            ),
-          }))
-        )
+      setPatient(data)
+      if (
+        data.preferred_suburb &&
+        data.max_distance_km != null &&
+        (data.rad_budget != null || data.dap_budget != null)
+      ) {
+        setScreen('results')
+      } else {
+        setScreen('preferences')
       }
 
       setLoading(false)
     }
 
-    load()
+    init()
   }, [])
 
-  async function registerInterest(bedId: string) {
-    // 🔒 Hard guard against duplicates (FIX #3)
-    if (!patient || registeredBedIds.includes(bedId)) return
+  /* ---------------- SCREEN 1: ONBOARDING ---------------- */
 
-    setRegisteringBedId(bedId)
+  const handleCreatePatient = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    setSaving(true)
+    setError(null)
+
+    const form = e.currentTarget
+    const formData = new FormData(form)
+
+    const { data, error } = await supabase
+      .from('patients')
+      .insert({
+        name: formData.get('name'),
+        email: formData.get('email'),
+        mobile: formData.get('mobile'),
+      })
+      .select()
+      .single()
+
+    if (error) {
+      setError('Unable to create patient')
+      setSaving(false)
+      return
+    }
+
+    localStorage.setItem('patient_id', data.id)
+    setPatient(data)
+    setScreen('preferences')
+    setSaving(false)
+  }
+
+  /* ---------------- SCREEN 2: PREFERENCES ---------------- */
+
+  const handleSavePreferences = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    if (!patient) return
+
+    setSaving(true)
+    setError(null)
+
+    const formData = new FormData(e.currentTarget)
+
+    const updates = {
+      preferred_suburb: formData.get('preferred_suburb'),
+      max_distance_km: Number(formData.get('max_distance_km')),
+      rad_budget: formData.get('rad_budget')
+        ? Number(formData.get('rad_budget'))
+        : null,
+      dap_budget: formData.get('dap_budget')
+        ? Number(formData.get('dap_budget'))
+        : null,
+    }
+
+    const { data, error } = await supabase
+      .from('patients')
+      .update(updates)
+      .eq('id', patient.id)
+      .select()
+      .single()
+
+    if (error) {
+      setError('Unable to save preferences')
+      setSaving(false)
+      return
+    }
+
+    setPatient(data)
+    setScreen('results')
+    setSaving(false)
+  }
+
+  /* ---------------- SCREEN 3: BED MATCHING ---------------- */
+
+  useEffect(() => {
+    if (screen !== 'results' || !patient) return
+
+    const loadBeds = async () => {
+      const { data } = await supabase
+        .from('beds')
+        .select('*')
+        .eq('status', 'open')
+
+      if (!data) return
+
+      const filtered = data.filter((b: Bed) => {
+        if (patient.dap_budget != null && b.dap != null) {
+          return b.dap <= patient.dap_budget
+        }
+        if (patient.rad_budget != null && b.rad != null) {
+          return b.rad <= patient.rad_budget
+        }
+        return false
+      })
+
+      setBeds(filtered)
+    }
+
+    loadBeds()
+  }, [screen, patient])
+
+  const handleRegisterInterest = async (bed: Bed) => {
+    if (!patient) return
+    setSaving(true)
+    setError(null)
 
     const { error } = await supabase.from('bed_interests').insert({
       patient_id: patient.id,
-      bed_id: bedId,
+      bed_id: bed.id,
     })
 
-    setRegisteringBedId(null)
-
-    if (!error) {
-      // Immediately lock UI
-      setRegisteredBedIds(prev => [...prev, bedId])
-    } else {
-      console.error(error)
-      alert('Unable to register interest. Please try again.')
+    if (error) {
+      setError('Unable to register interest')
+      setSaving(false)
+      return
     }
+
+    setSelectedBed(bed)
+    setScreen('interest_done')
+    setSaving(false)
   }
 
-  if (loading) return <div>Loading…</div>
+  /* ---------------- RENDER ---------------- */
 
-  if (!patient) {
-    return <div>Please start onboarding.</div>
+  if (loading) return <p>Loading…</p>
+
+  if (screen === 'onboarding') {
+    return (
+      <form onSubmit={handleCreatePatient}>
+        <h1>Start onboarding</h1>
+        <input name="name" placeholder="Name" required />
+        <input name="email" placeholder="Email" required />
+        <input name="mobile" placeholder="Mobile" required />
+        <button disabled={saving}>Continue</button>
+        {error && <p>{error}</p>}
+      </form>
+    )
   }
 
-  const matchedBeds = beds.filter(bed => {
-    if (bed.distance_km === undefined) return false
+  if (screen === 'preferences' && patient) {
+    return (
+      <form onSubmit={handleSavePreferences}>
+        <h1>Your preferences</h1>
+        <input name="preferred_suburb" placeholder="Suburb" required />
+        <input
+          name="max_distance_km"
+          placeholder="Max distance (km)"
+          type="number"
+          required
+        />
+        <input name="dap_budget" placeholder="DAP budget" type="number" />
+        <input name="rad_budget" placeholder="RAD budget" type="number" />
+        <button disabled={saving}>Find beds</button>
+        {error && <p>{error}</p>}
+      </form>
+    )
+  }
 
-    const withinDistance = bed.distance_km <= patient.max_distance_km
+  if (screen === 'results') {
+    return (
+      <div>
+        <h1>Available beds</h1>
+        {beds.length === 0 && <p>No beds currently available.</p>}
+        {beds.map(bed => (
+          <div key={bed.id}>
+            <strong>{bed.facility_name}</strong> – {bed.suburb}
+            <button onClick={() => handleRegisterInterest(bed)}>
+              Register interest
+            </button>
+          </div>
+        ))}
+        {error && <p>{error}</p>}
+      </div>
+    )
+  }
 
-    const withinBudget =
-      (patient.dap_budget !== null &&
-        bed.dap !== null &&
-        bed.dap <= patient.dap_budget) ||
-      (patient.rad_budget !== null &&
-        bed.rad !== null &&
-        bed.rad <= patient.rad_budget)
+  if (screen === 'interest_done' && selectedBed) {
+    return (
+      <div>
+        <h1>✅ Interest registered</h1>
+        <p>
+          The provider at <strong>{selectedBed.facility_name}</strong> will be in
+          touch.
+        </p>
+      </div>
+    )
+  }
 
-    return withinDistance && withinBudget
-  })
-
-  return (
-    <div style={{ padding: '2rem' }}>
-      <h1>Available Beds</h1>
-
-      {matchedBeds.length === 0 ? (
-        <p>No suitable beds currently available.</p>
-      ) : (
-        <ul>
-          {matchedBeds.map(bed => (
-            <li key={bed.id} style={{ marginBottom: '1rem' }}>
-              <strong>{bed.facility_name}</strong> — {bed.suburb} —{' '}
-              {bed.distance_km?.toFixed(1)} km
-
-              {registeredBedIds.includes(bed.id) ? (
-                <div style={{ color: 'green', marginTop: 4 }}>
-                  ✅ Interest registered. The provider will be in touch.
-                </div>
-              ) : (
-                <button
-                  style={{ marginLeft: 12 }}
-                  disabled={registeringBedId === bed.id}
-                  onClick={() => registerInterest(bed.id)}
-                >
-                  {registeringBedId === bed.id
-                    ? 'Registering…'
-                    : 'Register Interest'}
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
+  return null
 }
